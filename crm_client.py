@@ -738,7 +738,95 @@ class CrmClient:
             anterior = atual
             time.sleep(0.2)
 
-    def _localizar_linha_parcela(self, mes: str, ano: str):
+    # ------------------------------------------------------------------
+    # Varredura vertical da grade (virtualização)
+    # ------------------------------------------------------------------
+    # A grade só mantém no HTML as linhas perto da área visível. Depois de
+    # rolar pra baixo (ex: _garantir_ano_carregado), as linhas do TOPO —
+    # justamente as de 2026, com a grade ordenada por Ano desc — somem do
+    # HTML. Procurar só no que está "na tela" nesse momento fazia um mês que
+    # existe parecer inexistente ("sem mensalidade" falso).
+    def _viewport_vertical(self):
+        try:
+            return self.driver.find_element(
+                By.CSS_SELECTOR, f"{config.SELETOR_GRID_EXTRATOS} .ag-body-viewport"
+            )
+        except NoSuchElementException:
+            return None
+
+    def _definir_scroll_vertical(self, viewport, posicao: int):
+        try:
+            self.driver.execute_script("arguments[0].scrollTop = arguments[1];", viewport, posicao)
+            time.sleep(0.3)
+        except (WebDriverException, StaleElementReferenceException) as erro:
+            if self._e_erro_de_sessao_morta(erro):
+                raise
+
+    def _varrer_grade_vertical(self, incremento_px: int = 300, passos_max: int = 60):
+        """Gerador: rola a grade pro TOPO e vai descendo aos poucos até o fim,
+        parando a cada passo (yield devolve o scrollTop atual) pra quem chama
+        ler as linhas que estão no HTML naquele momento."""
+        viewport = self._viewport_vertical()
+        if viewport is None:
+            yield 0
+            return
+        self._definir_scroll_vertical(viewport, 0)
+        posicao_anterior = None
+        for _ in range(passos_max):
+            try:
+                posicao = int(self.driver.execute_script("return arguments[0].scrollTop;", viewport) or 0)
+            except (WebDriverException, StaleElementReferenceException):
+                viewport = self._viewport_vertical()
+                if viewport is None:
+                    return
+                continue
+            if posicao == posicao_anterior:
+                return  # não desce mais -- chegou ao fim da grade
+            yield posicao
+            posicao_anterior = posicao
+            self._definir_scroll_vertical(viewport, posicao + incremento_px)
+
+    def _resumo_competencias_grade(self) -> str:
+        """Diagnóstico pro log: quais Mês/Ano existem na grade (varrendo tudo)."""
+        vistos = []
+        for _ in self._varrer_grade_vertical():
+            for linha in self._linhas_extrato():
+                mes = self._valor_celula(linha, config.COL_COMPETENCIA)
+                ano = self._valor_celula(linha, config.COL_ANO).replace(".", "").strip()
+                chave = f"{mes}/{ano}"
+                if mes and chave not in vistos:
+                    vistos.append(chave)
+        return ", ".join(vistos) if vistos else "nenhuma linha legível"
+
+    def _localizar_linha_parcela(self, mes: str, ano: str, varrer: bool = True):
+        """
+        Procura a linha do mês/ano entre as linhas que estão no HTML agora;
+        se não achar e `varrer` for True, varre a grade inteira de cima a
+        baixo (virtualização) e, achando, deixa a grade rolada até ela e
+        devolve uma referência fresca. None só se o mês não existir em
+        NENHUM ponto da grade.
+        """
+        linha = self._localizar_linha_parcela_na_tela(mes, ano)
+        if linha is not None or not varrer:
+            return linha
+
+        melhor_numero, melhor_posicao = -1, None
+        for posicao in self._varrer_grade_vertical():
+            achada = self._localizar_linha_parcela_na_tela(mes, ano)
+            if achada is None:
+                continue
+            texto = self._valor_celula(achada, config.COL_PARCELA).strip()
+            numero = int(texto) if texto.isdigit() else -1
+            if numero > melhor_numero or melhor_posicao is None:
+                melhor_numero, melhor_posicao = numero, posicao
+        if melhor_posicao is None:
+            return None
+        viewport = self._viewport_vertical()
+        if viewport is not None:
+            self._definir_scroll_vertical(viewport, melhor_posicao)
+        return self._localizar_linha_parcela_na_tela(mes, ano)
+
+    def _localizar_linha_parcela_na_tela(self, mes: str, ano: str):
         """
         Varre as linhas AGORA (referência sempre fresca) e devolve a que
         bate com o mês/ano informado, ou None.
@@ -1044,44 +1132,47 @@ class CrmClient:
         # parcela diferentes — mantém sempre a de MAIOR número de parcela,
         # descarta a outra.
         melhores_por_mes = {}
-        for linha in self._linhas_extrato():
-            competencia = self._valor_celula(linha, config.COL_COMPETENCIA)
-            ano_texto = self._valor_celula(linha, config.COL_ANO).replace(".", "").strip()
-            if not ano_texto.isdigit() or competencia not in config.MESES:
-                continue
-            ano_linha = int(ano_texto)
-            idx_mes_linha = config.MESES.index(competencia)
-            if (ano_linha, idx_mes_linha) < (ano_min, idx_mes_min):
-                continue  # mais antigo que o mínimo configurado -- ignora
+        # varre a grade INTEIRA (virtualização: linhas fora da área visível
+        # somem do HTML) -- sem isso, meses do topo podiam ficar de fora
+        for _ in self._varrer_grade_vertical():
+            for linha in self._linhas_extrato():
+                competencia = self._valor_celula(linha, config.COL_COMPETENCIA)
+                ano_texto = self._valor_celula(linha, config.COL_ANO).replace(".", "").strip()
+                if not ano_texto.isdigit() or competencia not in config.MESES:
+                    continue
+                ano_linha = int(ano_texto)
+                idx_mes_linha = config.MESES.index(competencia)
+                if (ano_linha, idx_mes_linha) < (ano_min, idx_mes_min):
+                    continue  # mais antigo que o mínimo configurado -- ignora
 
-            texto_parcela = self._valor_celula(linha, config.COL_PARCELA).strip()
-            numero_parcela = int(texto_parcela) if texto_parcela.isdigit() else -1
+                texto_parcela = self._valor_celula(linha, config.COL_PARCELA).strip()
+                numero_parcela = int(texto_parcela) if texto_parcela.isdigit() else -1
 
-            chave = (ano_linha, competencia)
-            existente = melhores_por_mes.get(chave)
-            if existente is not None and existente["_numero_parcela"] >= numero_parcela:
-                continue  # já temos uma parcela igual ou maior pra esse mês -- ignora essa linha
+                chave = (ano_linha, competencia)
+                existente = melhores_por_mes.get(chave)
+                if existente is not None and existente["_numero_parcela"] >= numero_parcela:
+                    continue  # já temos uma parcela igual ou maior pra esse mês -- ignora essa linha
 
-            melhores_por_mes[chave] = {
-                "_numero_parcela": numero_parcela,
-                "Parcela": texto_parcela,
-                "Competencia": competencia,
-                "Ano": str(ano_linha),
-                "Numero de Documento": self._valor_celula(linha, config.COL_NUMERO_DOCUMENTO),
-                "Data Emissao": self._valor_celula(linha, config.COL_DATA_EMISSAO),
-                "Liberacao Meio Pgto": self._valor_celula(linha, config.COL_LIBERACAO_MEIO_PGTO),
-                "Valor Atualizado": self._valor_celula(linha, config.COL_VALOR_ATUALIZADO),
-                "Valor Desc Pontualidade": self._valor_celula(linha, config.COL_VALOR_DESC_PONTUALIDADE),
-                "Data Vencimento": self._valor_celula(linha, config.COL_DATA_VENCIMENTO),
-                "Data Pagamento": self._valor_celula(linha, config.COL_DATA_PAGAMENTO),
-                "Valor Pago": self._valor_celula(linha, config.COL_VALOR_PAGO),
-                "Meio de Pagamento": self._valor_celula(linha, config.COL_MEIO_PAGAMENTO),
-                "Status da Fatura": self._valor_celula(linha, config.COL_STATUS_FATURA),
-                "Origem": self._valor_celula(linha, config.COL_ORIGEM),
-                "Tipo": self._valor_celula(linha, config.COL_TIPO),
-                "Em Contestacao": self._valor_celula(linha, config.COL_EM_CONTESTACAO),
-                "Link Pagamento": "",  # por enquanto sempre vazio -- preenchido no loop abaixo
-            }
+                melhores_por_mes[chave] = {
+                    "_numero_parcela": numero_parcela,
+                    "Parcela": texto_parcela,
+                    "Competencia": competencia,
+                    "Ano": str(ano_linha),
+                    "Numero de Documento": self._valor_celula(linha, config.COL_NUMERO_DOCUMENTO),
+                    "Data Emissao": self._valor_celula(linha, config.COL_DATA_EMISSAO),
+                    "Liberacao Meio Pgto": self._valor_celula(linha, config.COL_LIBERACAO_MEIO_PGTO),
+                    "Valor Atualizado": self._valor_celula(linha, config.COL_VALOR_ATUALIZADO),
+                    "Valor Desc Pontualidade": self._valor_celula(linha, config.COL_VALOR_DESC_PONTUALIDADE),
+                    "Data Vencimento": self._valor_celula(linha, config.COL_DATA_VENCIMENTO),
+                    "Data Pagamento": self._valor_celula(linha, config.COL_DATA_PAGAMENTO),
+                    "Valor Pago": self._valor_celula(linha, config.COL_VALOR_PAGO),
+                    "Meio de Pagamento": self._valor_celula(linha, config.COL_MEIO_PAGAMENTO),
+                    "Status da Fatura": self._valor_celula(linha, config.COL_STATUS_FATURA),
+                    "Origem": self._valor_celula(linha, config.COL_ORIGEM),
+                    "Tipo": self._valor_celula(linha, config.COL_TIPO),
+                    "Em Contestacao": self._valor_celula(linha, config.COL_EM_CONTESTACAO),
+                    "Link Pagamento": "",  # por enquanto sempre vazio -- preenchido no loop abaixo
+                }
 
         parcelas = list(melhores_por_mes.values())
         for parcela in parcelas:
@@ -1494,11 +1585,34 @@ class CrmClient:
             mes_seguinte, ano_seguinte = self._mes_ano_seguinte()
 
             # decide qual fatura usar: prioriza a do mês seguinte se já existir
-            dados_parcela = self.localizar_parcela(mes_seguinte, ano_seguinte)
-            mes_alvo, ano_alvo = mes_seguinte, ano_seguinte
-            if dados_parcela is None:
-                dados_parcela = self.localizar_parcela(mes_atual, ano_atual)
-                mes_alvo, ano_alvo = mes_atual, ano_atual
+            def _escolher_parcela():
+                dados = self.localizar_parcela(mes_seguinte, ano_seguinte)
+                if dados is not None:
+                    return dados, mes_seguinte, ano_seguinte
+                return self.localizar_parcela(mes_atual, ano_atual), mes_atual, ano_atual
+
+            dados_parcela, mes_alvo, ano_alvo = _escolher_parcela()
+
+            if dados_parcela is None and config.CONFIRMAR_SEM_MENSALIDADE:
+                # Antes de gravar "sem mensalidade", CONFIRMA: registra no log
+                # o que a grade mostrou e recarrega a tela pra procurar de
+                # novo. Se na 2ª leitura o mês aparecer, segue normal; se a
+                # tela não carregar pra confirmar, é falha de consulta.
+                self.log(
+                    f"  Mês {mes_seguinte}/{ano_seguinte} e {mes_atual}/{ano_atual} não encontrados. "
+                    f"Meses vistos na grade: {self._resumo_competencias_grade()}"
+                )
+                self.log("  Ação: Refresh para confirmar a ausência de mensalidade")
+                estado = self._recarregar_financeiro(config.TIMEOUT_CARREGAMENTO_FINANCEIRO)
+                if estado != "linhas":
+                    raise ErroCarregamentoAthenas(
+                        "não consegui recarregar a grade pra confirmar a ausência de mensalidade"
+                    )
+                dados_parcela, mes_alvo, ano_alvo = _escolher_parcela()
+                if dados_parcela is not None:
+                    self.log("  Mensalidade apareceu na 2ª leitura (a 1ª leitura estava incompleta)")
+                else:
+                    self.log("  Ausência de mensalidade confirmada na 2ª leitura")
 
             # guarda mês/ano/link do fluxo principal, se algum, pra passar
             # pro relatório de meses reaproveitar (evita gerar o mesmo link

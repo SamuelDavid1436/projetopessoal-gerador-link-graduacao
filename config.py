@@ -300,6 +300,10 @@ MAX_TENTATIVAS_REFRESH_FINANCEIRO = 3
 # conferir de novo antes de aceitar o vazio como real (SEM_EXTRATOS).
 CONFIRMACOES_GRADE_VAZIA = 1
 
+# Antes de gravar SEM_MENSALIDADE (grade com linhas, mas sem o mês), dá um
+# refresh e procura de novo. Custa um recarregamento só nesses RAs.
+CONFIRMAR_SEM_MENSALIDADE = True
+
 # Depois de clicar em "Meio de Pagamento", o modal mostra "Gerando link..."
 # por um tempo antes do link aparecer. Quanto esperar (segundos) esse texto
 # virar o link (ou a recusa do CRM) antes de desistir e tentar o RA de novo.
