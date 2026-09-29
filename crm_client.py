@@ -68,7 +68,8 @@ class CrmClient:
     def __init__(self, driver, timeout: int = config.TIMEOUT_PADRAO, log=print):
         self.driver = driver
         self.timeout = timeout
-        self.log = log
+        self._log_externo = log
+        self._ra_atual = ""
         self.wait = WebDriverWait(driver, timeout)
         # quando True, a próxima chamada a abrir_lista_alunos() força um
         # reload completo da página, mesmo que já pareça estar na lista —
@@ -96,6 +97,13 @@ class CrmClient:
         "connection refused",
         "chrome failed to start",
     )
+
+    def log(self, mensagem: str):
+        """Log com o RA em consulta no começo de cada linha — com várias
+        janelas rodando ao mesmo tempo, as linhas se misturam e sem isso não
+        dá pra saber de qual RA é cada mensagem."""
+        prefixo = f"[RA {self._ra_atual}] " if self._ra_atual else ""
+        self._log_externo(f"{prefixo}{str(mensagem).strip()}")
 
     def _e_erro_de_sessao_morta(self, erro) -> bool:
         texto = str(erro).lower()
@@ -1078,15 +1086,63 @@ class CrmClient:
                 self.log(f"  [aviso] não consegui gerar link de {mes_parcela}/{ano_parcela}: {erro}")
                 parcela["Link Pagamento"] = ""
             finally:
-                # desmarca a checkbox antes do próximo mês -- clicar de novo
-                # simplesmente alterna (toggle), evita acumular seleção de
-                # vários meses ao mesmo tempo, o que confundiria o CRM
+                # desmarca TUDO antes do próximo mês (por estado, não por
+                # "clicar de novo") -- mais de uma linha marcada desabilita
+                # o botão 'Meio de Pagamento' no CRM
                 try:
-                    self.marcar_checkbox_linha(mes_parcela, ano_parcela)
+                    self._limpar_selecao_extratos()
                 except Exception:  # pylint: disable=broad-except
                     pass
 
         return parcelas
+
+    _JS_LINHAS_SELECIONADAS = """
+        const rows = document.querySelectorAll(arguments[0]);
+        return Array.from(rows).filter(r =>
+            r.getAttribute('aria-selected') === 'true' || r.classList.contains('ag-row-selected')
+        );
+    """
+
+    def _linhas_selecionadas(self):
+        try:
+            return self.driver.execute_script(self._JS_LINHAS_SELECIONADAS, config.SELETOR_LINHAS_EXTRATOS) or []
+        except WebDriverException as erro:
+            if self._e_erro_de_sessao_morta(erro):
+                raise
+            return []
+
+    def _linha_esta_selecionada(self, linha) -> bool:
+        try:
+            if linha.get_attribute("aria-selected") == "true":
+                return True
+            return "ag-row-selected" in (linha.get_attribute("class") or "")
+        except StaleElementReferenceException:
+            return False
+
+    def _limpar_selecao_extratos(self, tentativas: int = 3) -> bool:
+        """
+        Desmarca TODAS as linhas selecionadas da grade 'Todos os Extratos'.
+        Com mais de uma linha marcada, o CRM desabilita o botão 'Meio de
+        Pagamento' — então toda geração de link começa (e termina) com a
+        grade sem nenhuma seleção. Confere o estado real a cada passada, em
+        vez de "clicar de novo e torcer" (o que invertia a seleção quando um
+        clique falhava). Devolve True se a grade ficou sem seleção.
+        """
+        for _ in range(tentativas):
+            selecionadas = self._linhas_selecionadas()
+            if not selecionadas:
+                return True
+            for linha in selecionadas:
+                try:
+                    checkbox = linha.find_element(By.CSS_SELECTOR, "div[col-id='__row_status'] input[type='checkbox']")
+                    self._clicar(checkbox)
+                    time.sleep(0.2)
+                except (NoSuchElementException, StaleElementReferenceException, ErroConsultaRA):
+                    continue
+        restantes = len(self._linhas_selecionadas())
+        if restantes:
+            self.log(f"  [aviso] não consegui desmarcar {restantes} linha(s) da grade de extratos.")
+        return restantes == 0
 
     def marcar_checkbox_linha(self, mes: str, ano: str, tentativas: int = 3):
         """
@@ -1106,6 +1162,10 @@ class CrmClient:
         tentar de novo, nunca insistir na referência que já falhou.
         """
         ultimo_erro = None
+        if not self._limpar_selecao_extratos():
+            raise ErroConsultaRA(
+                f"Havia linhas marcadas na grade que não consegui desmarcar antes de marcar {mes}/{ano}."
+            )
         for tentativa in range(1, tentativas + 1):
             linha = self._localizar_linha_parcela(mes, ano)
             if linha is None:
@@ -1132,10 +1192,17 @@ class CrmClient:
                 continue
 
             try:
-                self._rolar_ate(celula_checkbox)
-                self._clicar(checkbox)
-                time.sleep(0.3)
-                return  # sucesso
+                if not self._linha_esta_selecionada(linha):
+                    self._rolar_ate(celula_checkbox)
+                    self._clicar(checkbox)
+                    time.sleep(0.3)
+                # confere o estado real: exatamente esta linha selecionada
+                linha = self._localizar_linha_parcela(mes, ano)
+                if linha is not None and self._linha_esta_selecionada(linha) and len(self._linhas_selecionadas()) == 1:
+                    return  # sucesso
+                ultimo_erro = "a seleção não ficou só na linha do mês"
+                self._limpar_selecao_extratos()
+                continue
             except (ErroConsultaRA, StaleElementReferenceException) as erro:
                 ultimo_erro = erro
                 time.sleep(0.3)
@@ -1297,7 +1364,8 @@ class CrmClient:
         registro["Status da Consulta"] = "OK"
         registro["_relatorio_consultado"] = False
 
-        self.log(f"  RA {ra}")
+        self._ra_atual = ra
+        self.log("Início da consulta")
         try:
             self.abrir_lista_alunos()
             self.buscar_ra(ra)
@@ -1371,6 +1439,10 @@ class CrmClient:
                         # em "Status da Consulta", sem inventar valor na coluna.
                         registro["Link de Pagamento"] = ""
                         registro["Status da Consulta"] = f"OK (CRM: {erro})"
+                    finally:
+                        # não deixa a linha marcada pro relatório de meses
+                        # (senão ficam 2 linhas marcadas e o botão trava)
+                        self._limpar_selecao_extratos()
 
                 mes_reutilizavel, ano_reutilizavel = mes_alvo, ano_alvo
                 link_reutilizavel = registro["Link de Pagamento"]
