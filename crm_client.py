@@ -54,6 +54,12 @@ class ErroCarregamentoAthenas(ErroConsultaRA):
         self.tentativas = tentativas
 
 
+class ErroRespostaAthenas(ErroConsultaRA):
+    """O CRM não respondeu a uma ação (ex: clique em 'Meio de Pagamento' sem
+    nenhum modal). É instabilidade do sistema de origem: o RA inteiro deve
+    ser tentado de novo (ver runner.py), não registrado como erro definitivo."""
+
+
 # Classificação final de cada RA (coluna "Resultado da Consulta" da saída).
 # "Consultei e não existe mensalidade" (SEM_MENSALIDADE) e "não consegui
 # consultar" (ERRO_*/TIMEOUT_*) NUNCA podem ter o mesmo código.
@@ -1101,23 +1107,35 @@ class CrmClient:
                 parcela["Link Pagamento"] = link_ja_gerado or ""
                 continue
 
-            try:
-                self.marcar_checkbox_linha(mes_parcela, ano_parcela)
-                parcela["Link Pagamento"] = self.gerar_link_pagamento()
-            except ErroDocumentoIndisponivel as erro:
-                parcela["Link Pagamento"] = ""  # CRM recusou -- resultado válido, não é erro
-                self.log(f"  [{mes_parcela}/{ano_parcela}] CRM: {erro}")
-            except (ErroConsultaRA, StaleElementReferenceException, TimeoutException, WebDriverException) as erro:
-                self.log(f"  [aviso] não consegui gerar link de {mes_parcela}/{ano_parcela}: {erro}")
-                parcela["Link Pagamento"] = ""
-            finally:
-                # desmarca TUDO antes do próximo mês (por estado, não por
-                # "clicar de novo") -- mais de uma linha marcada desabilita
-                # o botão 'Meio de Pagamento' no CRM
+            max_tentativas_mes = 2  # sem resposta do CRM: tenta mais uma vez esse mês
+            for tentativa_mes in range(1, max_tentativas_mes + 1):
                 try:
-                    self._limpar_selecao_extratos()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                    self.marcar_checkbox_linha(mes_parcela, ano_parcela)
+                    parcela["Link Pagamento"] = self.gerar_link_pagamento()
+                    break
+                except ErroDocumentoIndisponivel as erro:
+                    parcela["Link Pagamento"] = ""  # CRM recusou -- resultado válido, não é erro
+                    self.log(f"  [{mes_parcela}/{ano_parcela}] CRM: {erro}")
+                    break
+                except ErroRespostaAthenas as erro:
+                    parcela["Link Pagamento"] = ""
+                    if tentativa_mes < max_tentativas_mes:
+                        self.log(f"  [{mes_parcela}/{ano_parcela}] CRM sem resposta — tentando de novo "
+                                 f"({tentativa_mes + 1}/{max_tentativas_mes})")
+                    else:
+                        self.log(f"  [aviso] não consegui gerar link de {mes_parcela}/{ano_parcela}: {erro}")
+                except (ErroConsultaRA, StaleElementReferenceException, TimeoutException, WebDriverException) as erro:
+                    self.log(f"  [aviso] não consegui gerar link de {mes_parcela}/{ano_parcela}: {erro}")
+                    parcela["Link Pagamento"] = ""
+                    break
+                finally:
+                    # desmarca TUDO antes do próximo mês/tentativa (por estado,
+                    # não por "clicar de novo") -- mais de uma linha marcada
+                    # desabilita o botão 'Meio de Pagamento' no CRM
+                    try:
+                        self._limpar_selecao_extratos()
+                    except Exception:  # pylint: disable=broad-except
+                        pass
 
         return parcelas
 
@@ -1298,7 +1316,7 @@ class CrmClient:
         self._fechar_modal_se_houver()
 
         if texto_modal is None:
-            raise ErroConsultaRA("Nenhuma resposta do sistema apareceu a tempo depois de clicar em 'Meio de Pagamento'.")
+            raise ErroRespostaAthenas("Nenhuma resposta do sistema apareceu a tempo depois de clicar em 'Meio de Pagamento'.")
 
         if texto_modal.lower().startswith("http"):
             return texto_modal
@@ -1520,6 +1538,13 @@ class CrmClient:
             self.log(f"  Status final: {RESULTADO_ERRO_CARREGAMENTO}")
             self.log("  Motivo: Instabilidade no sistema de origem")
             self._salvar_screenshot_erro(ra, "erro_carregamento_athenas")
+        except ErroRespostaAthenas as erro:
+            registro["Resultado da Consulta"] = RESULTADO_TIMEOUT_ATHENAS
+            registro["Status da Consulta"] = f"Erro: {RESULTADO_TIMEOUT_ATHENAS} - {erro}"
+            self._forcar_reload_lista = True
+            self.log(f"  Status final: {RESULTADO_TIMEOUT_ATHENAS}")
+            self.log("  Motivo: o CRM não respondeu (instabilidade no sistema de origem)")
+            self._salvar_screenshot_erro(ra, "sem_resposta_athenas")
         except ErroConsultaRA as erro:
             registro["Resultado da Consulta"] = RESULTADO_ERRO_CONSULTA
             registro["Status da Consulta"] = f"Erro: {erro}"

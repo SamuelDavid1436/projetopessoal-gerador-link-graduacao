@@ -57,7 +57,10 @@ def _e_erro_de_timeout(status: str) -> bool:
     vez específica), diferente de "RA não encontrado" ou outros erros
     que não mudam tentando de novo.
     """
-    return "tempo esgotado" in (status or "").lower()
+    texto = (status or "").lower()
+    # "timeout_athenas": o CRM não respondeu a uma ação (ex: clique em
+    # 'Meio de Pagamento' sem modal) -- instabilidade, vale tentar de novo
+    return "tempo esgotado" in texto or "timeout_athenas" in texto
 
 
 def _worker(perfil_id, ras_do_perfil, resultados_queue, log_callback,
@@ -93,7 +96,7 @@ def _worker(perfil_id, ras_do_perfil, resultados_queue, log_callback,
                    and tentativa < MAX_TENTATIVAS_TIMEOUT and not evento_parar.is_set()):
                 tentativa += 1
                 log_callback(
-                    f"[{apelido}] RA {ra}: tempo esgotado — atualizando a página e tentando de "
+                    f"[{apelido}] RA {ra}: sistema lento/sem resposta — atualizando a página e tentando de "
                     f"novo (tentativa {tentativa}/{MAX_TENTATIVAS_TIMEOUT})..."
                 )
                 registro = cliente.consultar_ra(ra)
