@@ -59,6 +59,9 @@ class ErroCarregamentoAthenas(ErroConsultaRA):
 # consultar" (ERRO_*/TIMEOUT_*) NUNCA podem ter o mesmo código.
 RESULTADO_SUCESSO_COM_MENSALIDADE = "SUCESSO_COM_MENSALIDADE"
 RESULTADO_SEM_MENSALIDADE = "SEM_MENSALIDADE"
+# grade "Todos os Extratos" totalmente vazia no CRM, confirmada com refresh
+# -- não é "sem mensalidade do mês": é caso pra conferir manualmente
+RESULTADO_SEM_EXTRATOS = "SEM_EXTRATOS"
 RESULTADO_ERRO_CARREGAMENTO = "ERRO_CARREGAMENTO"
 RESULTADO_ERRO_CONSULTA = "ERRO_CONSULTA"
 RESULTADO_TIMEOUT_ATHENAS = "TIMEOUT_ATHENAS"
@@ -426,13 +429,13 @@ class CrmClient:
                 raise
             return "ausente"
 
-    def _aguardar_tela_mensalidade(self, timeout: float) -> bool:
+    def _aguardar_tela_mensalidade(self, timeout: float):
         """
-        Espera a tela de mensalidade ficar CONFIRMADAMENTE pronta: a grade
-        com linhas estáveis, ou a grade dizendo explicitamente que está
-        vazia. Qualquer outra coisa ao fim do timeout (grade ausente, ainda
-        carregando, zero linhas sem aviso) devolve False — é instabilidade,
-        não "sem mensalidade".
+        Espera a tela de mensalidade ficar CONFIRMADAMENTE pronta e devolve:
+          "linhas" -> grade com linhas estáveis
+          "vazia"  -> a própria grade diz que não há registros
+          None     -> nada disso até o timeout (ausente/carregando) — é
+                      instabilidade, não "sem mensalidade".
         """
         fim = time.time() + timeout
         anterior = None
@@ -440,30 +443,57 @@ class CrmClient:
         while time.time() < fim:
             estado = self._estado_grade_extratos()
             if estado == "vazia":
-                return True
+                return "vazia"
             if estado == "linhas":
                 atual = self._contagem_linhas_extrato()
                 if atual > 0 and atual == anterior:
                     if estavel_desde is None:
                         estavel_desde = time.time()
                     elif time.time() - estavel_desde > 0.5:
-                        return True
+                        return "linhas"
                 else:
                     estavel_desde = None
                 anterior = atual
             else:
                 anterior, estavel_desde = None, None
             time.sleep(0.3)
-        return False
+        return None
 
-    def _abrir_financeiro_com_recuperacao(self):
+    def _recarregar_financeiro(self, espera: float):
+        """F5 na página do aluno, volta pra aba Financeiro e espera a grade.
+        Devolve o mesmo que _aguardar_tela_mensalidade."""
+        try:
+            self.driver.refresh()
+        except TimeoutException:
+            pass  # página demorou pra "terminar" -- a espera abaixo decide se carregou
+        except WebDriverException as erro:
+            if self._e_erro_de_sessao_morta(erro):
+                raise
+        try:
+            aba = WebDriverWait(self.driver, espera).until(
+                EC.element_to_be_clickable((By.XPATH, config.XPATH_ABA_FINANCEIRO))
+            )
+            self._clicar(aba)
+            time.sleep(0.6)
+            self._definir_zoom(config.ZOOM_GRADE_FINANCEIRO)
+            return self._aguardar_tela_mensalidade(espera)
+        except (TimeoutException, StaleElementReferenceException, ErroConsultaRA):
+            return None
+
+    def _abrir_financeiro_com_recuperacao(self) -> str:
         """
         Abre a aba Financeiro e só devolve quando a tela de mensalidade
-        carregou de verdade. Se não carregar, faz refresh (F5) na página do
-        aluno e tenta de novo, até config.MAX_TENTATIVAS_REFRESH_FINANCEIRO
-        vezes, registrando cada tentativa no log. Esgotadas as tentativas,
-        levanta ErroCarregamentoAthenas — o RA é marcado como falha de
-        consulta, NUNCA como "sem mensalidade".
+        carregou de verdade: "linhas" (grade com extratos) ou "vazia" (grade
+        sem nenhum extrato, CONFIRMADA).
+
+        - Não carregou: refresh (F5) e tenta de novo, até
+          config.MAX_TENTATIVAS_REFRESH_FINANCEIRO vezes. Esgotado, levanta
+          ErroCarregamentoAthenas — nunca vira "sem mensalidade".
+        - Veio vazia: NÃO aceita de primeira (pode ser o Athenas devolvendo
+          a grade vazia por instabilidade). Faz refresh e confere de novo,
+          config.CONFIRMACOES_GRADE_VAZIA vez(es). Se aparecerem linhas, era
+          instabilidade e segue normal; só devolve "vazia" se continuar vazia
+          em todas as conferências.
 
         Seguro contra duplicidade: nada é gravado nem clicado no CRM (nenhuma
         checkbox, nenhum link) antes dessa etapa terminar; o refresh só
@@ -471,41 +501,36 @@ class CrmClient:
         """
         espera = config.TIMEOUT_CARREGAMENTO_FINANCEIRO
         max_tentativas = config.MAX_TENTATIVAS_REFRESH_FINANCEIRO
+        confirmacoes_vazia = config.CONFIRMACOES_GRADE_VAZIA
 
         try:
             self.ir_para_financeiro()
-            carregou = self._aguardar_tela_mensalidade(espera)
+            estado = self._aguardar_tela_mensalidade(espera)
         except ErroConsultaRA:
-            carregou = False  # nem a aba apareceu -- mesma instabilidade, tenta recuperar
-        self.log(f"  Tela de mensalidade carregada: {'SIM' if carregou else 'NÃO'}")
-        if carregou:
-            return
+            estado = None  # nem a aba apareceu -- mesma instabilidade, tenta recuperar
 
-        for tentativa in range(1, max_tentativas + 1):
-            self.log(f"  Tentativa: {tentativa}/{max_tentativas}")
-            self.log("  Ação: Refresh")
+        tentativas_refresh = 0
+        vezes_vazia = 0
+        while True:
+            self.log(f"  Tela de mensalidade carregada: {'SIM' if estado else 'NÃO'}")
+            if estado == "linhas":
+                if vezes_vazia:
+                    self.log("  Grade de extratos: veio com linhas após o refresh (a grade vazia era instabilidade)")
+                return "linhas"
+            if estado == "vazia":
+                vezes_vazia += 1
+                self.log(f"  Grade de extratos: VAZIA (conferência {vezes_vazia}/{confirmacoes_vazia + 1})")
+                if vezes_vazia > confirmacoes_vazia:
+                    return "vazia"
+                self.log("  Ação: Refresh para confirmar que a grade está vazia de verdade")
+            else:
+                if tentativas_refresh >= max_tentativas:
+                    break
+                tentativas_refresh += 1
+                self.log(f"  Tentativa: {tentativas_refresh}/{max_tentativas}")
+                self.log("  Ação: Refresh")
             self.log(f"  Aguardando carregamento: {espera}s")
-            try:
-                self.driver.refresh()
-            except TimeoutException:
-                pass  # página demorou pra "terminar" -- a espera abaixo decide se carregou
-            except WebDriverException as erro:
-                if self._e_erro_de_sessao_morta(erro):
-                    raise
-            carregou = False
-            try:
-                aba = WebDriverWait(self.driver, espera).until(
-                    EC.element_to_be_clickable((By.XPATH, config.XPATH_ABA_FINANCEIRO))
-                )
-                self._clicar(aba)
-                time.sleep(0.6)
-                self._definir_zoom(config.ZOOM_GRADE_FINANCEIRO)
-                carregou = self._aguardar_tela_mensalidade(espera)
-            except (TimeoutException, StaleElementReferenceException, ErroConsultaRA):
-                carregou = False
-            self.log(f"  Tela de mensalidade carregada: {'SIM' if carregou else 'NÃO'}")
-            if carregou:
-                return
+            estado = self._recarregar_financeiro(espera)
 
         raise ErroCarregamentoAthenas(
             f"tela de mensalidade não carregou após {max_tentativas} tentativa(s) de refresh",
@@ -1383,10 +1408,28 @@ class CrmClient:
             registro["E-mail"] = dados_cadastro.get("email", "")
 
             # --- aba Financeiro (com proteção contra instabilidade do Athenas) ---
-            self._abrir_financeiro_com_recuperacao()
+            estado_grade = self._abrir_financeiro_com_recuperacao()
 
             status_fin = self.extrair_status_financeiro()
             registro["Situacao"] = status_fin.get("situacao", "")
+
+            if estado_grade == "vazia":
+                # confirmado com refresh: o CRM não tem NENHUM extrato pra
+                # esse aluno. Diferente de "sem mensalidade do mês" -- fica
+                # destacado pra conferência manual, com print como prova.
+                registro["Mensalidade Encontrada"] = "Não (nenhum extrato no CRM)"
+                registro["Resultado da Consulta"] = RESULTADO_SEM_EXTRATOS
+                registro["Status da Consulta"] = (
+                    "OK (nenhum extrato no CRM, confirmado após refresh - conferir manualmente)"
+                )
+                registro["_parcelas_relatorio"] = []
+                registro["_relatorio_consultado"] = True
+                self.log("  Consulta realizada: SIM")
+                self.log("  Mensalidade encontrada: NÃO (grade de extratos vazia no CRM)")
+                self._salvar_screenshot_erro(ra, "sem_extratos_no_crm")
+                self._observar_campos_criticos_vazios(registro)
+                self.log(f"  Status final: {RESULTADO_SEM_EXTRATOS}")
+                return registro
 
             mes_atual, ano_atual = self._mes_ano_atual()
             mes_seguinte, ano_seguinte = self._mes_ano_seguinte()

@@ -264,7 +264,7 @@ COLUNAS_SAIDA = [
     "Origem",
     "Link de Pagamento",
     "Data/Hora do Link",     # quando o link foi gerado (só preenchido quando gera de verdade)
-    # SUCESSO_COM_MENSALIDADE / SEM_MENSALIDADE / ERRO_CARREGAMENTO /
+    # SUCESSO_COM_MENSALIDADE / SEM_MENSALIDADE / SEM_EXTRATOS / ERRO_CARREGAMENTO /
     # ERRO_CONSULTA / TIMEOUT_ATHENAS -- SEM_MENSALIDADE só quando a tela
     # carregou e confirmou que não há mensalidade (ver crm_client.py)
     "Resultado da Consulta",
@@ -296,6 +296,9 @@ ZOOM_GRADE_FINANCEIRO = 60
 # como "sem mensalidade") e entra no "Reprocessar erros".
 TIMEOUT_CARREGAMENTO_FINANCEIRO = 30
 MAX_TENTATIVAS_REFRESH_FINANCEIRO = 3
+# Quando a grade vem VAZIA (nenhum extrato), quantas vezes dar refresh e
+# conferir de novo antes de aceitar o vazio como real (SEM_EXTRATOS).
+CONFIRMACOES_GRADE_VAZIA = 1
 
 # ---------------------------------------------------------------------------
 # Histórico de execuções (usado no dashboard/página de Execuções)
