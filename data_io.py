@@ -230,10 +230,19 @@ def salvar_relatorio_meses(resultados: list, pasta_saida: str = None, momento: d
         # indexa as parcelas desse aluno por (mês, ano) pra achar rápido
         parcelas_por_mes = {(p.get("Competencia"), str(p.get("Ano"))): p for p in parcelas}
 
+        # Se a grade não foi consultada de verdade (erro/instabilidade), os
+        # meses sem parcela são "Não consultado" -- nunca "Sem mensalidade".
+        # Registros antigos (sem a chave) mantêm o comportamento anterior.
+        consultado = registro.get("_relatorio_consultado", True)
+
         algum_mes_preenchido = False
         for mes, ano in meses_fixos:
             dados_mes = parcelas_por_mes.get((mes, ano))
-            if dados_mes is not None:
+            if dados_mes is None and not consultado:
+                linha[f"{mes} - Situacao Mensalidade"] = "Não consultado"
+                linha[f"{mes} - Valor Pago"] = ""
+                linha[f"{mes} - Link Pagamento"] = ""
+            elif dados_mes is not None:
                 linha[f"{mes} - Situacao Mensalidade"] = "Com mensalidade"
                 linha[f"{mes} - Valor Pago"] = dados_mes.get("Valor Pago", "")
                 linha[f"{mes} - Link Pagamento"] = dados_mes.get("Link Pagamento", "")

@@ -264,6 +264,10 @@ COLUNAS_SAIDA = [
     "Origem",
     "Link de Pagamento",
     "Data/Hora do Link",     # quando o link foi gerado (só preenchido quando gera de verdade)
+    # SUCESSO_COM_MENSALIDADE / SEM_MENSALIDADE / ERRO_CARREGAMENTO /
+    # ERRO_CONSULTA / TIMEOUT_ATHENAS -- SEM_MENSALIDADE só quando a tela
+    # carregou e confirmou que não há mensalidade (ver crm_client.py)
+    "Resultado da Consulta",
     "Status da Consulta",    # OK / Erro: <mensagem>
 ]
 
@@ -283,6 +287,15 @@ TIMEOUT_ESTABILIZACAO_GRID = 5
 # visível) que causava campos vindo em branco. Se ainda faltar alguma
 # coluna depois disso, é só diminuir esse número (ex: 55).
 ZOOM_GRADE_FINANCEIRO = 60
+
+# Proteção contra instabilidade do Athenas na tela de mensalidade (aba
+# Financeiro). Se a grade "Todos os Extratos" não carregar em
+# TIMEOUT_CARREGAMENTO_FINANCEIRO segundos, a automação dá refresh (F5) na
+# página do aluno e espera de novo, até MAX_TENTATIVAS_REFRESH_FINANCEIRO
+# vezes. Esgotadas as tentativas, o RA sai como ERRO_CARREGAMENTO (nunca
+# como "sem mensalidade") e entra no "Reprocessar erros".
+TIMEOUT_CARREGAMENTO_FINANCEIRO = 30
+MAX_TENTATIVAS_REFRESH_FINANCEIRO = 3
 
 # ---------------------------------------------------------------------------
 # Histórico de execuções (usado no dashboard/página de Execuções)
