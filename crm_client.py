@@ -1259,24 +1259,62 @@ class CrmClient:
     # ------------------------------------------------------------------
     # Botão "Meio de Pagamento" + modal (link de sucesso OU recusa do CRM)
     # ------------------------------------------------------------------
+    # Textos provisórios que o modal mostra ENQUANTO o link é gerado. Não são
+    # resposta final — ler um deles como "recusa do CRM" fazia o RA sair com
+    # mensalidade mas sem link.
+    _TEXTOS_MODAL_PROVISORIOS = ("gerando", "carregando", "aguarde", "processando", "loading")
+
+    def _texto_modal_e_provisorio(self, texto: str) -> bool:
+        t = (texto or "").strip().lower()
+        if not t:
+            return True
+        if t.startswith("http"):
+            return False
+        return any(p in t for p in self._TEXTOS_MODAL_PROVISORIOS)
+
     def _aguardar_texto_modal(self, timeout: float = None):
         """
-        Espera o texto da mensagem do modal aparecer. O MESMO seletor
-        (span[data-id='dialogMessageText']) é usado tanto no modal de
-        sucesso ("Link do Meio de Pagamento", com um link) quanto no modal
-        de recusa do próprio CRM ("Documento não disponível, verifique o
-        status da fatura.") — só o modal de sucesso tem um <h1> de título,
-        então não podemos depender dele pra saber que o modal abriu.
-        Devolve o texto, ou None se nada apareceu a tempo.
+        Espera o modal mostrar a resposta FINAL. O MESMO seletor
+        (span[data-id='dialogMessageText']) é usado no modal de sucesso (com
+        o link) e no de recusa do CRM ("Documento não disponível..."). Antes
+        de qualquer um dos dois, o modal mostra um texto provisório
+        ("Gerando link...") que pode ficar bastante tempo na tela — esse
+        texto é ignorado e a espera continua até vir o link ou a recusa.
+
+        - `timeout`: quanto esperar o modal APARECER (padrão: self.timeout).
+        - config.TIMEOUT_GERACAO_LINK: quanto esperar o texto provisório virar
+          resposta final, depois que o modal apareceu.
+
+        Devolve o texto final, None se o modal nem apareceu, ou levanta
+        ErroRespostaAthenas se ficou preso no texto provisório.
         """
         timeout = timeout or self.timeout
         try:
-            elemento = WebDriverWait(self.driver, timeout).until(
+            WebDriverWait(self.driver, timeout).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, config.SELETOR_MODAL_TEXTO_LINK))
             )
-            return elemento.text.strip()
         except TimeoutException:
             return None
+
+        fim = time.time() + config.TIMEOUT_GERACAO_LINK
+        texto = ""
+        avisou = False
+        while time.time() < fim:
+            try:
+                texto = self.driver.find_element(By.CSS_SELECTOR, config.SELETOR_MODAL_TEXTO_LINK).text.strip()
+            except (NoSuchElementException, StaleElementReferenceException):
+                texto = ""
+            if not self._texto_modal_e_provisorio(texto):
+                return texto
+            if not avisou:
+                self.log(f"  Link sendo gerado pelo CRM (\"{texto or '...'}\") — aguardando até {config.TIMEOUT_GERACAO_LINK}s")
+                avisou = True
+            time.sleep(0.5)
+
+        raise ErroRespostaAthenas(
+            f"o CRM ficou gerando o link por mais de {config.TIMEOUT_GERACAO_LINK}s sem terminar "
+            f"(último texto: \"{texto or 'vazio'}\")"
+        )
 
     def _fechar_modal_se_houver(self):
         try:
@@ -1305,15 +1343,18 @@ class CrmClient:
                 "parcela antes de chamar esta função)."
             )
         self._clicar(botao)
-        texto_modal = self._aguardar_texto_modal()
-
-        if texto_modal is None:
-            # o clique pode não ter "pego" da primeira vez (grid virtualizado) — tenta mais uma vez
-            self._fechar_modal_se_houver()
-            self._clicar(botao)
+        try:
             texto_modal = self._aguardar_texto_modal()
 
-        self._fechar_modal_se_houver()
+            if texto_modal is None:
+                # o clique pode não ter "pego" da primeira vez (grid virtualizado) — tenta mais uma vez
+                self._fechar_modal_se_houver()
+                self._clicar(botao)
+                texto_modal = self._aguardar_texto_modal()
+        finally:
+            # fecha o modal em qualquer caso (inclusive se ficou preso em
+            # "Gerando link..."), pra não travar a tela pro próximo passo
+            self._fechar_modal_se_houver()
 
         if texto_modal is None:
             raise ErroRespostaAthenas("Nenhuma resposta do sistema apareceu a tempo depois de clicar em 'Meio de Pagamento'.")
