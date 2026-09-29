@@ -248,7 +248,12 @@ def salvar_relatorio_meses(resultados: list, pasta_saida: str = None, momento: d
                 linha[f"{mes} - Valor Pago"] = ""
                 linha[f"{mes} - Link Pagamento"] = ""
             elif dados_mes is not None:
-                linha[f"{mes} - Situacao Mensalidade"] = "Com mensalidade"
+                # mostra o Status da Fatura junto, pra ficar claro POR QUE não
+                # tem link (ex: "Pago"/"Negociado" não geram link, é esperado)
+                status_fatura = str(dados_mes.get("Status da Fatura", "") or "").strip()
+                linha[f"{mes} - Situacao Mensalidade"] = (
+                    f"Com mensalidade ({status_fatura})" if status_fatura else "Com mensalidade"
+                )
                 linha[f"{mes} - Valor Pago"] = dados_mes.get("Valor Pago", "")
                 linha[f"{mes} - Link Pagamento"] = dados_mes.get("Link Pagamento", "")
                 algum_mes_preenchido = True
