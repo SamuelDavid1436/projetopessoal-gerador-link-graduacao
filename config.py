@@ -314,7 +314,7 @@ TIMEOUT_GERACAO_LINK = 90
 # ---------------------------------------------------------------------------
 ARQUIVO_HISTORICO = os.path.join(PASTA_LOGS, "historico_execucoes.json")
 
-VERSAO_APP = "1.0.0"
+VERSAO_APP = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # Ícone, logo e manual do aplicativo (pasta assets/, ao lado deste arquivo)
