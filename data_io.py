@@ -149,14 +149,14 @@ _SUBCOLUNAS_POR_MES = ["Situacao Mensalidade", "Valor Pago", "Vencimento", "Link
 # Ordem final do relatório: identificação do aluno primeiro, depois a
 # situação financeira, e só então um bloco fixo pra cada mês de
 # config.MES_MINIMO_RELATORIO até config.MES_MAXIMO_RELATORIO.
-_COLUNAS_IDENTIFICACAO = ["RA", "Nome", "CPF", "Telefone", "CPF Responsável", "Nome Responsável"]
+_COLUNAS_IDENTIFICACAO = ["RA", "Nome", "CPF", "Telefone"]
 _COLUNA_SITUACAO = "Situação"
 
 # Colunas da base de disparo (nesta ordem). A última coluna ganha o nome do
 # mês quando todos os alunos da base são do mesmo mês (ex: "Outubro - Link
 # Pagamento"); com meses misturados, fica só "Link Pagamento".
-_COLUNAS_BASE_DISPARO = ["RA", "CPF", "Nome", "Telefone", "CPF Responsável", "Nome Responsável", "MÊS", "Vencimento"]
-_LARGURAS_BASE_DISPARO = [13, 14, 46, 16, 16, 40, 11, 12, 52]
+_COLUNAS_BASE_DISPARO = ["RA", "CPF", "Nome", "Telefone", "MÊS", "Vencimento"]
+_LARGURAS_BASE_DISPARO = [13, 14, 46, 16, 11, 12, 52]
 
 
 def _meses_fixos_relatorio() -> list:
@@ -206,19 +206,12 @@ def _telefone_disparo(celular):
 
 
 def _identificacao(registro: dict) -> dict:
-    """Campos de identificação do aluno, já com os nomes de coluna do relatório.
-    O CRM não traz um responsável financeiro separado: CPF e nome do
-    responsável repetem os do próprio aluno (nome em maiúsculas), a menos
-    que o registro já traga "CPF Responsável"/"Nome Responsável"."""
-    nome = str(registro.get("Nome", "") or "")
-    cpf = str(registro.get("CPF", "") or "")
+    """Campos de identificação do aluno, já com os nomes de coluna do relatório."""
     return {
         "RA": registro.get("RA", ""),
-        "Nome": nome,
-        "CPF": cpf,
+        "Nome": str(registro.get("Nome", "") or ""),
+        "CPF": str(registro.get("CPF", "") or ""),
         "Telefone": _telefone_formatado(registro.get("Celular", "")),
-        "CPF Responsável": str(registro.get("CPF Responsável", "") or "") or cpf,
-        "Nome Responsável": str(registro.get("Nome Responsável", "") or "") or nome.upper(),
     }
 
 
@@ -269,8 +262,7 @@ def salvar_relatorio_meses(resultados: list, pasta_saida: str = None, momento: d
     entre config.MES_MINIMO_RELATORIO/ANO_MINIMO_RELATORIO e
     config.MES_MAXIMO_RELATORIO/ANO_MAXIMO_RELATORIO.
 
-    Ordem das colunas: RA, Nome, CPF, Telefone, CPF Responsável, Nome
-    Responsável, Situação e, pra cada mês, "<Mês> - Situacao Mensalidade",
+    Ordem das colunas: RA, Nome, CPF, Telefone, Situação e, pra cada mês, "<Mês> - Situacao Mensalidade",
     "<Mês> - Valor Pago", "<Mês> - Vencimento", "<Mês> - Link Pagamento".
 
     Cada mês em aberto (não Pago/Negociado) tem o link de pagamento gerado
@@ -378,8 +370,7 @@ def salvar_base_disparo(resultados: list, pasta_saida: str = None, momento: date
     com o link da parcela de vencimento mais recente entre as que tiveram
     link gerado. Alunos sem nenhum link ficam de fora.
 
-    Colunas: RA, CPF, Nome, Telefone (55 + DDD + número), CPF Responsável,
-    Nome Responsável, MÊS, Vencimento e o link ("<Mês> - Link Pagamento",
+    Colunas: RA, CPF, Nome, Telefone (55 + DDD + número), MÊS, Vencimento e o link ("<Mês> - Link Pagamento",
     ou só "Link Pagamento" se a base tiver meses misturados).
 
     Retorna (caminho_csv, caminho_xlsx).
@@ -401,7 +392,6 @@ def salvar_base_disparo(resultados: list, pasta_saida: str = None, momento: date
         linhas.append({
             "RA": ident["RA"], "CPF": ident["CPF"], "Nome": ident["Nome"],
             "Telefone": _telefone_disparo(registro.get("Celular", "")),
-            "CPF Responsável": ident["CPF Responsável"], "Nome Responsável": ident["Nome Responsável"],
             "MÊS": escolhida["mes"], "Vencimento": escolhida["vencimento"], "_link": escolhida["link"],
         })
 
