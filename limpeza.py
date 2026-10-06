@@ -2,17 +2,19 @@
 """
 limpeza.py
 ==========
-Lógica do botão "Zerar painel": apaga o histórico de execuções (números do
-painel), as pastas de saída (CSV/Excel), os prints de erro, as bases de
-reprocessamento e o log de retomada.
+Lógica do botão "Zerar painel (começar outro polo)": apaga o histórico e os
+números do painel, a recuperação pendente, TODO o conteúdo das pastas de saída
+e de prints de erro (as pastas em si ficam) e as bases de reprocessamento.
 
-NÃO mexe nos perfis do Chrome (logins), nos apelidos/e-mails dos perfis, nem
-em nenhum arquivo fora das pastas do programa em Documentos.
+NUNCA apaga: perfis do Chrome (%LOCALAPPDATA%\\CapturaLinkPagamento\\perfis),
+apelidos/e-mails dos perfis, credenciais do Windows, nem nada fora da pasta de
+dados do programa (Documentos\\CapturaLinkPagamento).
 """
 import os
 import shutil
 
 import config
+import estilo
 import history
 import recuperacao
 
@@ -26,16 +28,27 @@ def _pastas_alvo() -> list:
     ]
 
 
-def _eh_pasta_segura(pasta: str) -> bool:
-    """Só deixa apagar dentro da pasta de dados do programa (Documentos/
-    CapturaLinkPagamento) — e nunca ela própria. Trava de segurança contra
-    caminho errado."""
-    base = os.path.realpath(config.PASTA_DOCUMENTOS)
-    alvo = os.path.realpath(pasta)
+def _dentro_de(base: str, alvo: str) -> bool:
+    base, alvo = os.path.realpath(base), os.path.realpath(alvo)
     try:
-        return os.path.commonpath([base, alvo]) == base and alvo != base
+        return os.path.commonpath([base, alvo]) == base
     except ValueError:  # discos diferentes no Windows
         return False
+
+
+def _eh_pasta_segura(pasta: str) -> bool:
+    """Trava de segurança: só pode apagar DENTRO da pasta de dados do
+    programa (e nunca a pasta de dados em si) — e jamais dentro da pasta
+    local dos perfis do Chrome."""
+    if not _dentro_de(config.PASTA_DOCUMENTOS, pasta):
+        return False
+    if os.path.realpath(pasta) == os.path.realpath(config.PASTA_DOCUMENTOS):
+        return False
+    if _dentro_de(config.PASTA_PERFIS, pasta) or _dentro_de(pasta, config.PASTA_PERFIS):
+        return False
+    if _dentro_de(config.PASTA_APP_LOCAL, pasta):
+        return False
+    return True
 
 
 def _itens(pasta: str) -> list:
@@ -53,11 +66,15 @@ def resumo() -> dict:
     }
 
 
-def zerar_tudo() -> dict:
-    """Apaga tudo. Devolve {"removidos": n, "falhas": [caminhos que não deu pra apagar]}.
-    Arquivo aberto no Excel, por exemplo, não pode ser apagado no Windows —
-    fica na lista de falhas e o resto segue sendo apagado."""
-    removidos, falhas = 0, []
+def zerar_tudo(app=None, falhas_out: list = None) -> int:
+    """
+    Zera estatísticas e histórico, descarta a recuperação pendente e apaga
+    todo o conteúdo das pastas de saída e de prints. Devolve QUANTOS itens
+    não puderam ser apagados (ex: arquivo aberto no Excel); os caminhos
+    deles vão para `falhas_out`, se informado. O resto segue sendo apagado.
+    `app` (opcional) é a janela principal — usada pra zerar os contadores em memória.
+    """
+    falhas = []
     for pasta in _pastas_alvo():
         for item in _itens(pasta):
             try:
@@ -65,10 +82,75 @@ def zerar_tudo() -> dict:
                     shutil.rmtree(item)
                 else:
                     os.remove(item)
-                removidos += 1
             except OSError:
                 falhas.append(item)
 
-    history._salvar_lista([])  # zera os números do painel
-    recuperacao.descartar()  # descarta log de retomada, se houver
-    return {"removidos": removidos, "falhas": falhas}
+    history._salvar_lista([])  # zera histórico e estatísticas do painel  # pylint: disable=protected-access
+    recuperacao.descartar()  # descarta a recuperação pendente, se houver
+
+    if app is not None:
+        with app._lock_progresso:  # pylint: disable=protected-access
+            app.progresso_atual = 0.0
+            app.concluidos_atual = 0
+            app.total_atual = 0
+            app.contagem_sucesso = 0
+            app.contagem_erro = 0
+            app.ras_em_processamento = {}
+            app.inicio_execucao_dt = None
+            app.apelidos_execucao_atual = []
+
+    if falhas_out is not None:
+        falhas_out.extend(falhas)
+    return len(falhas)
+
+
+def zerar_painel_com_confirmacao(app):
+    """Fluxo completo do botão: recusa se houver execução rodando, pede
+    confirmação (listando o que será apagado), zera tudo, limpa a base
+    selecionada na tela Execuções, atualiza Início e Execuções e avisa se
+    houve itens que não deu pra apagar."""
+    from tkinter import messagebox  # import tardio: só a interface precisa de tkinter
+
+    if app.em_execucao:
+        messagebox.showwarning(
+            "Atenção", "Espere a execução atual terminar (ou clique em Parar) antes de zerar o painel."
+        )
+        return
+
+    r = resumo()
+    confirmar = messagebox.askyesno(
+        "Zerar painel",
+        "Isso vai APAGAR, sem possibilidade de desfazer:\n\n"
+        f"  • os números e o histórico do painel ({r['execucoes_historico']} execução(ões));\n"
+        f"  • todas as pastas de saída com os arquivos CSV e Excel ({r['pastas_saida']} pasta(s));\n"
+        "  • os prints de erro e as bases de reprocessamento;\n"
+        "  • o conteúdo da tela de Logs.\n\n"
+        "Os perfis e os logins NÃO são apagados.\n\n"
+        "Copie antes os arquivos que ainda precisar. Quer zerar mesmo assim?",
+        icon="warning", default="no",
+    )
+    if not confirmar:
+        return
+
+    falhas = []
+    n_falhas = zerar_tudo(app, falhas_out=falhas)
+
+    # limpa a base escolhida na tela Execuções e o texto da tela de Logs
+    pagina_exec = app.paginas["Execuções"]
+    pagina_exec.caminho_arquivo_ras = None
+    pagina_exec.label_arquivo.configure(text="Nenhum arquivo importado.", text_color=estilo.TEXTO_SECUNDARIO)
+    app.paginas["Logs"]._limpar()  # pylint: disable=protected-access
+    app._log(f"Painel zerado ({n_falhas} item(ns) não puderam ser apagados).")  # pylint: disable=protected-access
+
+    for nome in ("Início", "Execuções"):
+        app.paginas[nome].atualizar()
+
+    if n_falhas:
+        messagebox.showwarning(
+            "Painel zerado, com ressalvas",
+            f"{n_falhas} item(ns) não puderam ser apagados — provavelmente estão abertos no Excel ou no "
+            "Explorer. Feche-os e use \"Zerar painel\" de novo.\n\n"
+            + "\n".join(os.path.basename(f) for f in falhas[:8]),
+        )
+    else:
+        messagebox.showinfo("Painel zerado", "Tudo limpo. Pode começar o próximo polo.")

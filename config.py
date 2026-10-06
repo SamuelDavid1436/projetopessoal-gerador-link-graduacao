@@ -333,6 +333,14 @@ def caminho_recurso(*partes) -> str:
     return os.path.join(base, *partes)
 
 
+# Pasta assets ao lado do código (rodando com "python main.py"). No .exe de
+# arquivo único os assets são extraídos em sys._MEIPASS — ver localizar_manual().
+DIR_ASSETS = os.path.join(PASTA_PROJETO, "assets")
+
+# Contato de suporte (tela Suporte e mensagens de aviso)
+SUPORTE_TELEFONE = "(11) 94727-8128"
+SUPORTE_EMAIL = "samueldayvid5@icloud.com"
+
 CAMINHO_ICONE = caminho_recurso("assets", "icone.ico")
 CAMINHO_LOGO = caminho_recurso("assets", "logo.png")
 CAMINHO_MANUAL = caminho_recurso("assets", "manual.pdf")
@@ -344,3 +352,21 @@ CAMINHO_MANUAL_WORD = caminho_recurso("assets", "manual.docx")  # cópia editáv
 NUM_PERFIS = 3
 PASTA_PERFIS = os.path.join(PASTA_APP_LOCAL, "perfis")
 ARQUIVO_PERFIS_META = os.path.join(PASTA_APP_LOCAL, "perfis_meta.json")
+
+
+def localizar_manual():
+    """Caminho do manual.pdf, ou None se não achar. No .exe de arquivo único
+    os assets são extraídos em sys._MEIPASS (a pasta assets ao lado do .exe
+    fica vazia), então procura primeiro lá; depois em DIR_ASSETS e, por
+    último, numa pasta assets ao lado do executável."""
+    candidatos = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidatos.append(os.path.join(meipass, "assets", "manual.pdf"))
+    candidatos.append(os.path.join(DIR_ASSETS, "manual.pdf"))
+    if getattr(sys, "frozen", False):
+        candidatos.append(os.path.join(os.path.dirname(sys.executable), "assets", "manual.pdf"))
+    for caminho in candidatos:
+        if os.path.isfile(caminho):
+            return caminho
+    return None

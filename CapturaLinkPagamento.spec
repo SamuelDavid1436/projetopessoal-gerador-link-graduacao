@@ -50,6 +50,7 @@ hiddenimports += [
     "PIL._tkinter_finder",
     "pandas",
     "openpyxl",
+    "limpeza",
 ]
 
 a = Analysis(

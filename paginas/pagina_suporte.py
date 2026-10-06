@@ -6,6 +6,8 @@ Informações de contato para suporte, e atalho para o manual (Word).
 """
 import os
 
+from tkinter import messagebox
+
 import customtkinter as ctk
 
 import config
@@ -26,8 +28,8 @@ class PaginaSuporte(ctk.CTkFrame):
         painel.pack(fill="x", padx=24, pady=(0, 16))
 
         for rotulo, valor in [
-            ("Telefone", "(11) 94727-8128"),
-            ("E-mail", "samueldayvid5@icloud.com"),
+            ("Telefone", config.SUPORTE_TELEFONE),
+            ("E-mail", config.SUPORTE_EMAIL),
         ]:
             linha = ctk.CTkFrame(painel, fg_color="transparent")
             linha.pack(fill="x", padx=16, pady=10)
@@ -53,5 +55,13 @@ class PaginaSuporte(ctk.CTkFrame):
         ).pack(anchor="w", padx=16, pady=16)
 
     def _abrir_manual(self):
-        self.controlador.abrir_arquivo(config.CAMINHO_MANUAL)
+        caminho = config.localizar_manual()
+        if caminho is None:
+            messagebox.showwarning(
+                "Manual não encontrado",
+                "Não encontrei o arquivo do manual nesta instalação.\n\n"
+                f"Peça uma cópia ao suporte: {config.SUPORTE_TELEFONE} · {config.SUPORTE_EMAIL}",
+            )
+            return
+        self.controlador.abrir_arquivo(caminho)
 

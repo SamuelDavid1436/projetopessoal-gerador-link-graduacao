@@ -344,65 +344,8 @@ class App(ctk.CTk):
             messagebox.showerror("Erro", f"Não consegui abrir a pasta: {erro}")
 
     def zerar_painel(self):
-        """
-        Botão "Zerar painel" (tela Início): volta o programa ao estado de
-        "recém-instalado" no que diz respeito a resultados — zera os números,
-        o histórico, as pastas de saída, os prints de erro e a tela de Logs.
-        Os logins dos perfis NÃO são afetados. Pede confirmação, porque não
-        dá pra desfazer.
-        """
-        if self.em_execucao:
-            messagebox.showwarning("Atenção", "Espere a execução atual terminar (ou clique em Parar) antes de zerar o painel.")
-            return
-
-        r = limpeza.resumo()
-        confirmar = messagebox.askyesno(
-            "Zerar painel",
-            "Isso vai APAGAR, sem possibilidade de desfazer:\n\n"
-            f"  • os números e o histórico do painel ({r['execucoes_historico']} execução(ões));\n"
-            f"  • todas as pastas de saída com os arquivos CSV e Excel ({r['pastas_saida']} pasta(s));\n"
-            "  • os prints de erro e as bases de reprocessamento;\n"
-            "  • o conteúdo da tela de Logs.\n\n"
-            "Os logins dos perfis NÃO são apagados.\n\n"
-            "Copie antes os arquivos que ainda precisar. Quer zerar mesmo assim?",
-            icon="warning", default="no",
-        )
-        if not confirmar:
-            return
-
-        resultado = limpeza.zerar_tudo()
-
-        # zera o estado em memória do painel
-        with self._lock_progresso:
-            self.progresso_atual = 0.0
-            self.concluidos_atual = 0
-            self.total_atual = 0
-            self.contagem_sucesso = 0
-            self.contagem_erro = 0
-            self.ras_em_processamento = {}
-            self.inicio_execucao_dt = None
-            self.apelidos_execucao_atual = []
-
-        # limpa a base escolhida na tela Execuções e o texto da tela de Logs
-        pagina_exec = self.paginas["Execuções"]
-        pagina_exec.caminho_arquivo_ras = None
-        pagina_exec.label_arquivo.configure(text="Nenhum arquivo importado.", text_color=estilo.TEXTO_SECUNDARIO)
-        self.paginas["Logs"]._limpar()  # pylint: disable=protected-access
-        self._log(f"Painel zerado: {resultado['removidos']} item(ns) apagado(s).")
-
-        for pagina in self.paginas.values():
-            if hasattr(pagina, "atualizar") and pagina is not self.paginas["Logs"]:
-                pagina.atualizar()
-
-        if resultado["falhas"]:
-            messagebox.showwarning(
-                "Painel zerado, com ressalvas",
-                f"{len(resultado['falhas'])} item(ns) não puderam ser apagados — provavelmente estão abertos no "
-                "Excel ou no Explorer. Feche e use \"Zerar painel\" de novo.\n\n"
-                + "\n".join(os.path.basename(f) for f in resultado["falhas"][:8]),
-            )
-        else:
-            messagebox.showinfo("Painel zerado", "Tudo limpo. Pode começar a próxima execução.")
+        """Botão "Zerar painel" (Configurações). Ver limpeza.py."""
+        limpeza.zerar_painel_com_confirmacao(self)
 
     def reprocessar_erros(self, caminho_resultado_csv: str):
         """

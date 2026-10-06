@@ -10,6 +10,7 @@ interface gráfica própria e sem precisar tocar no CRM manualmente.
 ## Índice
 
 - [O que o programa faz](#o-que-o-programa-faz)
+- [Base de entrada e arquivos gerados](#base-de-entrada-e-arquivos-gerados)
 - [Funcionalidades](#funcionalidades)
 - [Capturas de tela](#capturas-de-tela)
 - [Instalação (uso final — sem Python)](#instalação-uso-final--sem-python)
@@ -17,6 +18,7 @@ interface gráfica própria e sem precisar tocar no CRM manualmente.
 - [Como usar](#como-usar)
 - [Estrutura do projeto](#estrutura-do-projeto)
 - [Gerando o executável (.exe)](#gerando-o-executável-exe)
+- [Chrome e driver](#chrome-e-driver)
 - [Solução de problemas comuns](#solução-de-problemas-comuns)
 - [Suporte](#suporte)
 
@@ -37,6 +39,42 @@ RA, a automação:
 Cada execução é **independente**: não existe histórico de "RA já
 processado" travando nada — a mesma base pode ser reimportada quantas
 vezes for preciso ao longo do mês, atualizando quem ainda não pagou.
+
+## Base de entrada e arquivos gerados
+
+### Base de entrada
+
+- Formato: CSV ou Excel (`.xlsx` / `.xls`).
+- O **RA fica na primeira coluna**; o cabeçalho é opcional. Só a primeira
+  coluna é lida — outras colunas (inclusive telefone) são ignoradas. O
+  celular de cada aluno vem do cadastro no CRM.
+- RAs repetidos são processados todas as vezes que aparecem.
+- Linhas vazias são ignoradas.
+
+### Arquivos gerados
+
+Cada execução cria uma pasta `Documentos/CapturaLinkPagamento/saida/
+AAAA-MM-DD_HH-MM-SS/` com três arquivos, **cada um em CSV (separado por
+`;`, UTF-8) e em Excel**:
+
+| Arquivo | Conteúdo |
+|---|---|
+| `resultado` | Resumo técnico, uma linha por RA: RA, perfil, CPF, nome, celular, e-mail, curso, situação, mensalidade encontrada, competência, ano, valor atualizado, **vencimento**, dados de pagamento, link, data/hora do link, resultado e status da consulta. É a base do botão *Reprocessar erros*. |
+| `relatorio_meses` | Visão completa, uma linha por aluno. Colunas: `RA`, `Nome`, `CPF`, `Telefone`, `Situação` e, para **cada mês de junho a dezembro**, quatro colunas: `<Mês> - Situacao Mensalidade`, `<Mês> - Valor Pago`, `<Mês> - Vencimento` e `<Mês> - Link Pagamento`. |
+| `base_disparo` | Arquivo enxuto para disparo, uma linha por aluno. Colunas: `RA`, `CPF`, `Nome`, `Telefone`, `MÊS`, `Vencimento` e o link (`<Mês> - Link Pagamento`). |
+
+### Regra do link (`base_disparo`)
+
+- Só entram alunos que **tiveram link de pagamento gerado**; quem está com
+  tudo pago/negociado, sem mensalidade ou com erro fica de fora.
+- Se o aluno tem mais de um link gerado (ex.: setembro e outubro em
+  aberto), vale o da parcela de **vencimento mais recente**.
+- `Telefone` sai no formato `55` + DDD + número (numérico). Sem telefone
+  válido no cadastro, o aluno continua na base, com o campo em branco.
+- Faturas **pagas** ou **negociadas** não geram link; o vencimento delas
+  aparece só no `relatorio_meses`.
+- O período do `relatorio_meses` (hoje junho a dezembro/2026) é ajustado em
+  `config.py` (`MES_MINIMO_RELATORIO` ... `ANO_MAXIMO_RELATORIO`).
 
 ## Funcionalidades
 
@@ -61,6 +99,10 @@ vezes for preciso ao longo do mês, atualizando quem ainda não pagou.
 - **Cada execução gera sua própria pasta** de saída (CSV + Excel),
   identificada por data/hora — nunca mistura arquivos de execuções
   diferentes.
+- **Base de disparo** (`base_disparo`): um link por aluno, com vencimento e
+  telefone no formato 55 + DDD + número, pronta para o disparo.
+- **Zerar painel**: em *Configurações*, apaga números, histórico e pastas de
+  saída pra começar outro polo do zero — sem mexer nos logins.
 - **Manual do usuário completo**, embutido no programa (aba Suporte).
 
 ## Capturas de tela
@@ -117,7 +159,12 @@ A interface é organizada em páginas, acessíveis pela barra lateral:
   **Parar** interrompe a execução — sem fechar o navegador no meio de
   um RA. O histórico completo fica registrado, com botões **Abrir
   pasta** e **Reprocessar erros** por execução.
-- **Configurações** — tema claro/escuro e local dos dados.
+- **Configurações** — tema claro/escuro, local dos dados e a seção
+  **Zerar painel (começar outro polo)**: apaga os números e o histórico do
+  painel, todas as pastas de saída, os prints de erro e as bases de
+  reprocessamento (o botão **Abrir pasta Saída** serve para copiar antes
+  o que ainda precisar). Pede confirmação, não dá para desfazer, fica
+  bloqueado durante uma execução e **nunca apaga perfis nem logins**.
 - **Logs** — acompanhamento detalhado, linha a linha, em tempo real.
 - **Suporte** — telefone, e-mail e botão **Abrir manual** (manual
   completo em PDF, com todas as telas explicadas).
@@ -182,6 +229,21 @@ Antes de distribuir pra qualquer máquina nova, rode
 "arquivo bloqueado" do Windows. Veja `TI_LEIA_ISTO.md` para o guia
 completo, incluindo o que fazer se a empresa usar AppLocker/WDAC.
 
+## Chrome e driver
+
+- O programa usa o **Google Chrome instalado** na máquina e o
+  **ChromeDriver**, baixado automaticamente pelo `webdriver-manager` na
+  primeira execução (precisa de internet; leva de 10 a 30 segundos). Ele
+  fica guardado na pasta `.wdm` dentro da pasta do usuário
+  (`C:\Users\seu-usuário\.wdm`).
+- Mantenha o Chrome atualizado: quando o Chrome atualiza, o driver
+  correspondente é baixado de novo sozinho na próxima abertura.
+- Se a rede da empresa bloquear o download do driver, libere o acesso ou
+  peça ao TI para liberar.
+- Cada perfil usa uma pasta própria de dados do Chrome em
+  `%LOCALAPPDATA%\CapturaLinkPagamento\perfis`. Um perfil **não pode ser
+  aberto duas vezes ao mesmo tempo**.
+
 ## Solução de problemas comuns
 
 **"Chrome failed to start: crashed" / perfil perde o login do nada**
@@ -190,6 +252,17 @@ sincronizada por OneDrive/Google Drive — o sincronizador brigando com o
 Chrome pelos mesmos arquivos causa corrupção. Este projeto já guarda os
 perfis em `%LOCALAPPDATA%` (fora de qualquer sincronização) por esse
 motivo exato.
+
+**O Chrome não abre / erro de driver (`session not created`, `This version of ChromeDriver only supports...`)**
+Feche todas as janelas do Chrome, apague a pasta `.wdm` dentro da pasta do
+usuário (`C:\Users\seu-usuário\.wdm`) e abra o programa de novo — o driver
+certo é baixado outra vez. Se persistir, confira a internet/proxy.
+
+**Perfil em uso (`user data directory is already in use`)**
+Já existe uma janela do Chrome aberta com aquele perfil (por exemplo, o
+*Login manual* que não foi fechado, ou uma execução anterior travada).
+Feche essa janela (ou finalize os processos `chrome.exe` e
+`chromedriver.exe` no Gerenciador de Tarefas) e tente de novo.
 
 **"invalid session id" em cascata (todo RA seguinte falha igual)**
 Sinal de que a sessão do navegador morreu de vez no meio da execução —
@@ -211,4 +284,5 @@ esse RA manualmente no CRM.
 ## Suporte
 
 Contato disponível dentro do próprio programa, na aba **Suporte** — ou
-consulte o manual completo (Word/PDF) em `assets/manual.pdf`.
+consulte o manual completo em PDF (`assets/manual.pdf`). Contato:
+(11) 94727-8128 · samueldayvid5@icloud.com.
