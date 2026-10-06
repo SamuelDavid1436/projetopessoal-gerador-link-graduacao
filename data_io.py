@@ -7,6 +7,7 @@ gravar o resultado final, também em CSV e Excel.
 """
 import csv as csv_modulo
 import os
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -140,18 +141,22 @@ def salvar_resultado(registros: list, pasta_saida: str = None, momento: datetime
     return caminho_csv, caminho_xlsx
 
 
-# Sub-colunas de cada bloco de mês no relatório largo. "Situacao Mensalidade"
-# substitui os antigos "Competencia"/"Ano" — como agora cada bloco já tem o
-# nome do mês travado no cabeçalho (ex: "Junho - Valor Pago"), não precisa
-# repetir mês/ano dentro do bloco; só indica se aquele mês existe ou não
-# pra esse aluno.
-_SUBCOLUNAS_POR_MES = ["Situacao Mensalidade", "Valor Pago", "Link Pagamento"]
+# Sub-colunas de cada bloco de mês no relatório largo. Cada bloco já tem o
+# nome do mês no cabeçalho (ex: "Junho - Vencimento"); "Situacao Mensalidade"
+# indica se aquele mês existe pra esse aluno (e o status da fatura).
+_SUBCOLUNAS_POR_MES = ["Situacao Mensalidade", "Valor Pago", "Vencimento", "Link Pagamento"]
 
-# Ordem final do relatório: Situação (financeira) primeiro, depois um
-# bloco fixo pra cada mês de config.MES_MINIMO_RELATORIO até
-# config.MES_MAXIMO_RELATORIO, e só no final os dados de identificação do aluno.
-_COLUNAS_FIXAS_INICIO = ["Situacao"]
-_COLUNAS_FIXAS_FIM = ["RA", "Perfil", "CPF", "Nome", "Celular", "E-mail"]
+# Ordem final do relatório: identificação do aluno primeiro, depois a
+# situação financeira, e só então um bloco fixo pra cada mês de
+# config.MES_MINIMO_RELATORIO até config.MES_MAXIMO_RELATORIO.
+_COLUNAS_IDENTIFICACAO = ["RA", "Nome", "CPF", "Telefone", "CPF Responsável", "Nome Responsável"]
+_COLUNA_SITUACAO = "Situação"
+
+# Colunas da base de disparo (nesta ordem). A última coluna ganha o nome do
+# mês quando todos os alunos da base são do mesmo mês (ex: "Outubro - Link
+# Pagamento"); com meses misturados, fica só "Link Pagamento".
+_COLUNAS_BASE_DISPARO = ["RA", "CPF", "Nome", "Telefone", "CPF Responsável", "Nome Responsável", "MÊS", "Vencimento"]
+_LARGURAS_BASE_DISPARO = [13, 14, 46, 16, 16, 40, 11, 12, 52]
 
 
 def _meses_fixos_relatorio() -> list:
@@ -175,100 +180,158 @@ def _meses_fixos_relatorio() -> list:
     return meses
 
 
+def _digitos_telefone(celular) -> str:
+    """Devolve só os dígitos do celular, SEM o DDI 55 (DDD + número)."""
+    digitos = re.sub(r"\D", "", str(celular or ""))
+    while digitos.startswith("55") and len(digitos) > 11:
+        digitos = digitos[2:]
+    return digitos
+
+
+def _telefone_formatado(celular) -> str:
+    """'5511983224029' -> '(11)983224029' (formato do relatorio_meses)."""
+    digitos = _digitos_telefone(celular)
+    if len(digitos) < 10:
+        return digitos
+    return f"({digitos[:2]}){digitos[2:]}"
+
+
+def _telefone_disparo(celular):
+    """'(11)983224029' / '5511983224029' -> 5511983224029 (55 + DDD + número,
+    como número inteiro). Devolve None se não houver telefone válido."""
+    digitos = _digitos_telefone(celular)
+    if len(digitos) not in (10, 11):
+        return None
+    return int("55" + digitos)
+
+
+def _identificacao(registro: dict) -> dict:
+    """Campos de identificação do aluno, já com os nomes de coluna do relatório.
+    O CRM não traz um responsável financeiro separado: CPF e nome do
+    responsável repetem os do próprio aluno (nome em maiúsculas), a menos
+    que o registro já traga "CPF Responsável"/"Nome Responsável"."""
+    nome = str(registro.get("Nome", "") or "")
+    cpf = str(registro.get("CPF", "") or "")
+    return {
+        "RA": registro.get("RA", ""),
+        "Nome": nome,
+        "CPF": cpf,
+        "Telefone": _telefone_formatado(registro.get("Celular", "")),
+        "CPF Responsável": str(registro.get("CPF Responsável", "") or "") or cpf,
+        "Nome Responsável": str(registro.get("Nome Responsável", "") or "") or nome.upper(),
+    }
+
+
+def _pasta_da_execucao(pasta_saida, momento) -> str:
+    pasta_saida = pasta_saida or config.PASTA_SAIDA
+    momento = momento or datetime.now()
+    pasta_execucao = os.path.join(pasta_saida, momento.strftime("%Y-%m-%d_%H-%M-%S"))
+    os.makedirs(pasta_execucao, exist_ok=True)
+    return pasta_execucao
+
+
+def _gravar_csv_e_xlsx(df: pd.DataFrame, pasta_execucao: str, nome: str, larguras=None, colunas_numericas=()):
+    """Grava df como <nome>.csv (UTF-8 com BOM, separado por ';') e
+    <nome>.xlsx (cabeçalho em negrito). Tudo é texto no Excel, exceto as
+    `colunas_numericas`."""
+    caminho_csv = os.path.join(pasta_execucao, f"{nome}.csv")
+    caminho_xlsx = os.path.join(pasta_execucao, f"{nome}.xlsx")
+    df.to_csv(caminho_csv, index=False, encoding="utf-8-sig", sep=";")
+    df.to_excel(caminho_xlsx, index=False)
+
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    wb = load_workbook(caminho_xlsx)
+    ws = wb.active
+    for celula in ws[1]:
+        celula.font = Font(bold=True)
+    for idx_col, coluna in enumerate(df.columns, start=1):
+        letra = get_column_letter(idx_col)
+        if larguras and idx_col <= len(larguras):
+            ws.column_dimensions[letra].width = larguras[idx_col - 1]
+        for linha in range(2, ws.max_row + 1):
+            celula = ws.cell(row=linha, column=idx_col)
+            if coluna in colunas_numericas:
+                celula.number_format = "0"
+            elif celula.value is not None:
+                celula.number_format = "@"
+    wb.save(caminho_xlsx)
+    return caminho_csv, caminho_xlsx
+
+
 def salvar_relatorio_meses(resultados: list, pasta_saida: str = None, momento: datetime = None) -> tuple:
     """
     Gera um arquivo SEPARADO (relatorio_meses.csv/.xlsx) — não altera o
     resultado.csv/.xlsx normal — com as parcelas de cada aluno, em formato
-    LARGO: uma linha por aluno, com um bloco de colunas TRAVADO (sempre o
-    mesmo, independente do aluno) pra cada mês entre
-    config.MES_MINIMO_RELATORIO/ANO_MINIMO_RELATORIO e
-    config.MES_MAXIMO_RELATORIO/ANO_MAXIMO_RELATORIO (hoje: Junho a
-    Dezembro/2026 — mude essas constantes em config.py quando precisar
-    avançar o período).
+    LARGO: uma linha por aluno e um bloco de colunas TRAVADO pra cada mês
+    entre config.MES_MINIMO_RELATORIO/ANO_MINIMO_RELATORIO e
+    config.MES_MAXIMO_RELATORIO/ANO_MAXIMO_RELATORIO.
 
-    Cada bloco de mês tem 3 colunas, já nomeadas com o mês de verdade (ex:
-    "Junho - Situacao Mensalidade", "Junho - Valor Pago", "Junho - Link
-    Pagamento"):
-      - Situacao Mensalidade: "Com mensalidade" se existir uma parcela
-        daquele mês pra esse aluno, "Sem mensalidade" se não existir.
-      - Valor Pago / Link Pagamento: vazios quando "Sem mensalidade".
+    Ordem das colunas: RA, Nome, CPF, Telefone, CPF Responsável, Nome
+    Responsável, Situação e, pra cada mês, "<Mês> - Situacao Mensalidade",
+    "<Mês> - Valor Pago", "<Mês> - Vencimento", "<Mês> - Link Pagamento".
 
-    Cada mês em aberto (não Pago/Negociado) tem o link de pagamento
-    gerado de verdade — vale pra todo mundo, pode ser mais de um link por
-    aluno (ver crm_client.capturar_parcelas_a_partir_de).
-
-    Ordem das colunas: Situação (financeira), Junho - ..., Julho - ...,
-    ..., Dezembro - ..., e por último RA, Perfil, CPF, Nome, Celular,
-    E-mail.
+    Cada mês em aberto (não Pago/Negociado) tem o link de pagamento gerado
+    de verdade (ver crm_client.capturar_parcelas_a_partir_de); a data de
+    vencimento vem da grade pra todo mês que tenha parcela.
 
     `resultados` é a mesma lista de registros da execução — cada um deve
-    ter a chave "_parcelas_relatorio" (lista de dicionários, uma por
-    parcela, já filtrada/ordenada por crm_client.py). Salva na MESMA pasta
-    da execução (mesmo `momento`) que o resultado.csv/.xlsx normal.
+    ter a chave "_parcelas_relatorio". Salva na MESMA pasta da execução
+    (mesmo `momento`) que o resultado.csv/.xlsx normal.
 
     Retorna (caminho_csv, caminho_xlsx).
     """
-    pasta_saida = pasta_saida or config.PASTA_SAIDA
-    momento = momento or datetime.now()
-
-    nome_pasta_execucao = momento.strftime("%Y-%m-%d_%H-%M-%S")
-    pasta_execucao = os.path.join(pasta_saida, nome_pasta_execucao)
-    os.makedirs(pasta_execucao, exist_ok=True)
-
+    pasta_execucao = _pasta_da_execucao(pasta_saida, momento)
     meses_fixos = _meses_fixos_relatorio()  # [(mes, ano), ...] travado
 
-    colunas_finais = list(_COLUNAS_FIXAS_INICIO)
+    colunas_finais = list(_COLUNAS_IDENTIFICACAO) + [_COLUNA_SITUACAO]
     for mes, _ano in meses_fixos:
         for subcoluna in _SUBCOLUNAS_POR_MES:
             colunas_finais.append(f"{mes} - {subcoluna}")
-    colunas_finais += _COLUNAS_FIXAS_FIM
 
     linhas = []
     for registro in resultados:
-        linha = {coluna: registro.get(coluna, "") for coluna in _COLUNAS_FIXAS_INICIO + _COLUNAS_FIXAS_FIM}
+        linha = _identificacao(registro)
+        linha[_COLUNA_SITUACAO] = registro.get("Situacao", "")
         parcelas = registro.get("_parcelas_relatorio", []) or []
         # indexa as parcelas desse aluno por (mês, ano) pra achar rápido
         parcelas_por_mes = {(p.get("Competencia"), str(p.get("Ano"))): p for p in parcelas}
 
         # Se a grade não foi consultada de verdade (erro/instabilidade), os
         # meses sem parcela são "Não consultado" -- nunca "Sem mensalidade".
-        # Registros antigos (sem a chave) mantêm o comportamento anterior.
         consultado = registro.get("_relatorio_consultado", True)
         sem_extratos = registro.get("Resultado da Consulta") == "SEM_EXTRATOS"
 
         algum_mes_preenchido = False
         for mes, ano in meses_fixos:
             dados_mes = parcelas_por_mes.get((mes, ano))
+            vazio = {"Valor Pago": "", "Vencimento": "", "Link Pagamento": ""}
             if dados_mes is None and sem_extratos:
-                linha[f"{mes} - Situacao Mensalidade"] = "Sem extratos no CRM (conferir)"
-                linha[f"{mes} - Valor Pago"] = ""
-                linha[f"{mes} - Link Pagamento"] = ""
+                situacao_mes, valores = "Sem extratos no CRM (conferir)", vazio
             elif dados_mes is None and not consultado:
-                linha[f"{mes} - Situacao Mensalidade"] = "Não consultado"
-                linha[f"{mes} - Valor Pago"] = ""
-                linha[f"{mes} - Link Pagamento"] = ""
+                situacao_mes, valores = "Não consultado", vazio
             elif dados_mes is not None:
                 # mostra o Status da Fatura junto, pra ficar claro POR QUE não
                 # tem link (ex: "Pago"/"Negociado" não geram link, é esperado)
                 status_fatura = str(dados_mes.get("Status da Fatura", "") or "").strip()
-                linha[f"{mes} - Situacao Mensalidade"] = (
-                    f"Com mensalidade ({status_fatura})" if status_fatura else "Com mensalidade"
-                )
-                linha[f"{mes} - Valor Pago"] = dados_mes.get("Valor Pago", "")
-                linha[f"{mes} - Link Pagamento"] = dados_mes.get("Link Pagamento", "")
+                situacao_mes = f"Com mensalidade ({status_fatura})" if status_fatura else "Com mensalidade"
+                valores = {
+                    "Valor Pago": dados_mes.get("Valor Pago", ""),
+                    "Vencimento": dados_mes.get("Data Vencimento", ""),
+                    "Link Pagamento": dados_mes.get("Link Pagamento", ""),
+                }
                 algum_mes_preenchido = True
             else:
-                linha[f"{mes} - Situacao Mensalidade"] = "Sem mensalidade"
-                linha[f"{mes} - Valor Pago"] = ""
-                linha[f"{mes} - Link Pagamento"] = ""
+                situacao_mes, valores = "Sem mensalidade", vazio
+            linha[f"{mes} - Situacao Mensalidade"] = situacao_mes
+            for subcoluna, valor in valores.items():
+                linha[f"{mes} - {subcoluna}"] = valor
 
         # Linha toda vazia (sem Situação nem nenhum mês encontrado) --
-        # sinaliza o motivo em vez de deixar tudo em branco sem explicação
-        # nenhuma. Usa o texto exato "RA não encontrado na base" quando é
-        # isso mesmo que aconteceu; se ficou vazia por outro motivo de
-        # erro (timeout esgotado, sessão do navegador morta, etc), mostra
-        # esse motivo real em vez de inventar "não encontrado" à toa.
-        sem_situacao = not str(linha.get("Situacao", "")).strip()
+        # sinaliza o motivo em vez de deixar tudo em branco.
+        sem_situacao = not str(linha.get(_COLUNA_SITUACAO, "")).strip()
         if sem_situacao and not algum_mes_preenchido:
             status_consulta = str(registro.get("Status da Consulta", "") or "")
             eh_outro_erro = (
@@ -276,18 +339,75 @@ def salvar_relatorio_meses(resultados: list, pasta_saida: str = None, momento: d
                 and "não encontrado" not in status_consulta.lower()
             )
             if eh_outro_erro:
-                linha["Situacao"] = f"Erro na consulta: {status_consulta[len('Erro:'):].strip()}"
+                linha[_COLUNA_SITUACAO] = f"Erro na consulta: {status_consulta[len('Erro:'):].strip()}"
             else:
-                linha["Situacao"] = "RA não encontrado na base"
+                linha[_COLUNA_SITUACAO] = "RA não encontrado na base"
 
         linhas.append(linha)
 
     df = pd.DataFrame(linhas, columns=colunas_finais)
+    return _gravar_csv_e_xlsx(df, pasta_execucao, "relatorio_meses")
 
-    caminho_csv = os.path.join(pasta_execucao, "relatorio_meses.csv")
-    caminho_xlsx = os.path.join(pasta_execucao, "relatorio_meses.xlsx")
 
-    df.to_csv(caminho_csv, index=False, encoding="utf-8-sig", sep=";")
-    df.to_excel(caminho_xlsx, index=False)
+def _data_para_ordenar(texto) -> tuple:
+    """'07/10/2026' -> (2026, 10, 7). Data ilegível vira (0, 0, 0)."""
+    m = re.match(r"\s*(\d{1,2})/(\d{1,2})/(\d{4})", str(texto or ""))
+    return (int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else (0, 0, 0)
 
-    return caminho_csv, caminho_xlsx
+
+def _parcelas_com_link(registro: dict) -> list:
+    """Parcelas do aluno que TÊM link de pagamento gerado. Se o relatório de
+    meses falhou pra esse RA, usa a parcela do fluxo principal (se tiver link)."""
+    candidatas = []
+    for p in registro.get("_parcelas_relatorio", []) or []:
+        link = str(p.get("Link Pagamento", "") or "").strip()
+        if link.lower().startswith("http"):
+            candidatas.append({"mes": p.get("Competencia", ""), "ano": str(p.get("Ano", "")),
+                               "vencimento": p.get("Data Vencimento", ""), "link": link})
+    if not candidatas:
+        link = str(registro.get("Link de Pagamento", "") or "").strip()
+        if link.lower().startswith("http"):
+            candidatas.append({"mes": registro.get("Competencia", ""), "ano": str(registro.get("Ano", "")),
+                               "vencimento": registro.get("Vencimento", ""), "link": link})
+    return candidatas
+
+
+def salvar_base_disparo(resultados: list, pasta_saida: str = None, momento: datetime = None) -> tuple:
+    """
+    Gera a base de disparo (base_disparo.csv/.xlsx): UMA linha por aluno,
+    com o link da parcela de vencimento mais recente entre as que tiveram
+    link gerado. Alunos sem nenhum link ficam de fora.
+
+    Colunas: RA, CPF, Nome, Telefone (55 + DDD + número), CPF Responsável,
+    Nome Responsável, MÊS, Vencimento e o link ("<Mês> - Link Pagamento",
+    ou só "Link Pagamento" se a base tiver meses misturados).
+
+    Retorna (caminho_csv, caminho_xlsx).
+    """
+    pasta_execucao = _pasta_da_execucao(pasta_saida, momento)
+
+    linhas, meses_usados = [], []
+    for registro in resultados:
+        candidatas = _parcelas_com_link(registro)
+        if not candidatas:
+            continue
+        escolhida = max(
+            candidatas,
+            key=lambda c: (_data_para_ordenar(c["vencimento"]), int(c["ano"]) if c["ano"].isdigit() else 0,
+                           config.MESES.index(c["mes"]) if c["mes"] in config.MESES else -1),
+        )
+        ident = _identificacao(registro)
+        meses_usados.append(escolhida["mes"])
+        linhas.append({
+            "RA": ident["RA"], "CPF": ident["CPF"], "Nome": ident["Nome"],
+            "Telefone": _telefone_disparo(registro.get("Celular", "")),
+            "CPF Responsável": ident["CPF Responsável"], "Nome Responsável": ident["Nome Responsável"],
+            "MÊS": escolhida["mes"], "Vencimento": escolhida["vencimento"], "_link": escolhida["link"],
+        })
+
+    unicos = {m for m in meses_usados if m}
+    nome_coluna_link = f"{next(iter(unicos))} - Link Pagamento" if len(unicos) == 1 else "Link Pagamento"
+    df = pd.DataFrame(linhas, columns=_COLUNAS_BASE_DISPARO + ["_link"]).rename(columns={"_link": nome_coluna_link})
+    df["Telefone"] = df["Telefone"].astype("Int64")
+    return _gravar_csv_e_xlsx(df, pasta_execucao, "base_disparo",
+                              larguras=_LARGURAS_BASE_DISPARO, colunas_numericas=("Telefone",))

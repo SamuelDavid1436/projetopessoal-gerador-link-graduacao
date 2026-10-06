@@ -1051,6 +1051,7 @@ class CrmClient:
             "Competencia": self._valor_celula(linha, config.COL_COMPETENCIA),
             "Ano": self._valor_celula(linha, config.COL_ANO).replace(".", "").strip(),
             "Valor Atualizado": self._valor_celula(linha, config.COL_VALOR_ATUALIZADO),
+            "Vencimento": self._valor_celula(linha, config.COL_DATA_VENCIMENTO),
             "Data Pagamento": self._valor_celula(linha, config.COL_DATA_PAGAMENTO),
             "Valor Pago": self._valor_celula(linha, config.COL_VALOR_PAGO),
             "Meio de Pagamento": self._valor_celula(linha, config.COL_MEIO_PAGAMENTO),
@@ -1064,6 +1065,7 @@ class CrmClient:
         if not dados["Origem"] and config.COL_ORIGEM:
             linha_direita = self._rolar_ate_coluna(mes, ano, config.COL_ORIGEM)
             if linha_direita is not None:
+                dados["Vencimento"] = self._valor_celula(linha_direita, config.COL_DATA_VENCIMENTO) or dados["Vencimento"]
                 dados["Data Pagamento"] = self._valor_celula(linha_direita, config.COL_DATA_PAGAMENTO) or dados["Data Pagamento"]
                 dados["Valor Pago"] = self._valor_celula(linha_direita, config.COL_VALOR_PAGO) or dados["Valor Pago"]
                 dados["Meio de Pagamento"] = self._valor_celula(linha_direita, config.COL_MEIO_PAGAMENTO) or dados["Meio de Pagamento"]
