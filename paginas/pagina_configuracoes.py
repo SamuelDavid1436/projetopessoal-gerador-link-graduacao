@@ -50,6 +50,31 @@ class PaginaConfiguracoes(ctk.CTkFrame):
             command=lambda: self.controlador.abrir_pasta(config.PASTA_DOCUMENTOS),
         ).pack(anchor="w", padx=16, pady=(0, 16))
 
+        # --- Seção separada: Zerar painel ---
+        painel_zerar = ctk.CTkFrame(self, fg_color=estilo.FUNDO_CARTAO, corner_radius=estilo.RAIO_CARTAO)
+        painel_zerar.pack(fill="x", padx=24, pady=(16, 0))
+        ctk.CTkLabel(painel_zerar, text="Zerar painel", font=ctk.CTkFont(weight="bold"),
+                     text_color=estilo.TEXTO_PRIMARIO).pack(anchor="w", padx=16, pady=(16, 4))
+        ctk.CTkLabel(
+            painel_zerar,
+            text=("Use entre uma execução e outra para começar do zero. Apaga os números e o histórico do "
+                  "painel, todas as pastas de saída (CSV e Excel), os prints de erro, as bases de "
+                  "reprocessamento e o conteúdo da tela de Logs.\n"
+                  "Os logins dos perfis NÃO são apagados. Não dá para desfazer: copie antes os arquivos que "
+                  "ainda precisar."),
+            text_color=estilo.TEXTO_SECUNDARIO, justify="left", wraplength=760,
+        ).pack(anchor="w", padx=16, pady=(0, 12))
+        self.botao_zerar = ctk.CTkButton(
+            painel_zerar, text="🗑  Zerar painel", fg_color=estilo.BOTAO_PARAR,
+            hover_color=estilo.BOTAO_PARAR_HOVER, text_color="white", width=160,
+            command=self.controlador.zerar_painel,
+        )
+        self.botao_zerar.pack(anchor="w", padx=16, pady=(0, 16))
+
+    def atualizar(self):
+        # não deixa zerar o painel no meio de uma execução
+        self.botao_zerar.configure(state="disabled" if self.controlador.em_execucao else "normal")
+
     def _alternar_tema(self):
         modo = "dark" if self.switch_tema.get() else "light"
         ctk.set_appearance_mode(modo)

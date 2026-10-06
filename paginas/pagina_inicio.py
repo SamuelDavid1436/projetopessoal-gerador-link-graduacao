@@ -112,11 +112,6 @@ class PaginaInicio(ctk.CTkFrame):
 
         bloco_botoes = ctk.CTkFrame(cabecalho, fg_color="transparent")
         bloco_botoes.pack(side="right")
-        self.botao_zerar = ctk.CTkButton(
-            bloco_botoes, text="🗑  Zerar painel", fg_color=estilo.FUNDO_SUTIL, hover_color=estilo.BORDA,
-            text_color=estilo.TEXTO_PRIMARIO, width=140, command=self.controlador.zerar_painel,
-        )
-        self.botao_zerar.pack(side="left", padx=(0, 10))
         self.botao_parar = ctk.CTkButton(
             bloco_botoes, text="⏹  Parar", fg_color=estilo.BOTAO_PARAR, hover_color=estilo.BOTAO_PARAR_HOVER,
             width=100, command=self.controlador.parar_execucao, state="disabled",
@@ -267,9 +262,6 @@ class PaginaInicio(ctk.CTkFrame):
         self.cartao_perfis.atualizar_valor(f"{self.controlador.perfis_configurados_count()}/{config.NUM_PERFIS}")
         self.cartao_execucoes_hoje.atualizar_valor(str(stats["execucoes_hoje"]))
         self.cartao_tempo_hoje.atualizar_valor(stats["tempo_total_hoje"])
-
-        # não deixa zerar o painel no meio de uma execução
-        self.botao_zerar.configure(state="disabled" if self.controlador.em_execucao else "normal")
 
         # execução em andamento
         if self.controlador.em_execucao:
