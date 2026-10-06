@@ -19,11 +19,15 @@ block_cipher = None
 
 # customtkinter precisa dos próprios arquivos de tema/fonte (não são .py) —
 # collect_all garante que tudo isso vai junto no executável.
+# selenium e webdriver_manager entram pelo mesmo motivo: versões novas do
+# selenium carregam submódulos (ex: selenium.webdriver.chrome.webdriver) de
+# forma dinâmica, e o PyInstaller não os enxerga sozinho — sem isso o .exe
+# falha com "No module named 'selenium.webdriver.chrome.webdriver'".
 datas = []
 binaries = []
 hiddenimports = []
 
-for pacote in ("customtkinter",):
+for pacote in ("customtkinter", "selenium", "webdriver_manager"):
     d, b, h = collect_all(pacote)
     datas += d
     binaries += b
