@@ -257,6 +257,7 @@ COLUNAS_SAIDA = [
     "Competencia",
     "Ano",
     "Valor Atualizado",
+    "Vencimento",            # data de vencimento da fatura (dd/mm/aaaa)
     "Data Pagamento",
     "Valor Pago",
     "Meio de Pagamento",

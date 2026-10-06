@@ -115,6 +115,10 @@ class App(ctk.CTk):
                 data_io.salvar_relatorio_meses(resultados, momento=momento)
             except Exception as erro_relatorio:  # pylint: disable=broad-except
                 self._log(f"[aviso] não consegui gerar o relatório de meses na recuperação: {erro_relatorio}")
+            try:
+                data_io.salvar_base_disparo(resultados, momento=momento)
+            except Exception as erro_disparo:  # pylint: disable=broad-except
+                self._log(f"[aviso] não consegui gerar a base de disparo na recuperação: {erro_disparo}")
             messagebox.showinfo(
                 "Recuperado", f"Resultados parciais salvos.\n\nCSV: {caminho_csv}\nExcel: {caminho_xlsx}",
             )
@@ -493,6 +497,13 @@ class App(ctk.CTk):
                                f"{config.ANO_MINIMO_RELATORIO}): {caminho_relatorio_csv}")
                 except Exception as erro_relatorio:  # pylint: disable=broad-except
                     self._log(f"[aviso] não consegui gerar o relatório de meses: {erro_relatorio}")
+                try:
+                    caminho_disparo_csv, _ = data_io.salvar_base_disparo(
+                        resultados, momento=self.inicio_execucao_dt
+                    )
+                    self._log(f"Base de disparo: {caminho_disparo_csv}")
+                except Exception as erro_disparo:  # pylint: disable=broad-except
+                    self._log(f"[aviso] não consegui gerar a base de disparo: {erro_disparo}")
             self._log(f"Execução finalizada ({status_final}). {len(resultados)} registro(s) processado(s).")
 
         except Exception as erro:  # pylint: disable=broad-except
